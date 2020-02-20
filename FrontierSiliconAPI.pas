@@ -7,13 +7,13 @@ unit FrontierSiliconAPI;
 |  _______________________________________________________  |
 | |                                                       | |
 | |     Remote API for Frontier Silicon based devices     | |
-| | (c) 2018 Alexander Feuster (alexander.feuster@web.de) | |
-| |             http://www.github.com/feuster             | |
+| | (c) 2019 Alexander Feuster (alexander.feuster@web.de) | |
+| |            https://www.github.com/feuster             | |
 | |_______________________________________________________| |
 |___________________________________________________________}
 
 //define API basics
-{$DEFINE APIVERSION:='2.8'}
+{$DEFINE APIVERSION:='2.9'}
 {$DEFINE INDY10}
 //{$DEFINE FSAPI_DEBUG}
 {___________________________________________________________}
@@ -23,7 +23,7 @@ interface
 uses
   Classes, SysUtils, StrUtils, DateUtils, LazUTF8, fphttpclient, XMLRead, DOM
   {$IFDEF LCL}, Forms{$IFDEF FSAPI_DEBUG}, Dialogs{$ENDIF}{$ENDIF}
-  {$IFDEF INDY10},IdUDPClient, IdStack{$ENDIF}
+  {$IFDEF INDY10},IdUDPClient, IdStack, IdHTTP{$ENDIF}
   ;
 
 function fsapi_HexStrToStr(Value: String): String;
@@ -175,9 +175,6 @@ var
   fsapi_Debug_NoShowMessage:  Boolean;
   fsapi_Debug_Message:        String;
   {$ENDIF}
-  {$IFDEF LCL}
-  fsapi_HTTP_active:          Boolean = false;
-  {$ENDIF}
 
 const
   API_Version:  String = APIVERSION;
@@ -322,6 +319,49 @@ end;
 //------------------------------------------------------------------------------
 // HTTP Command
 //------------------------------------------------------------------------------
+{$IFDEF INDY10}
+function fsapi_HTTP(COMMAND: String): String;
+//Send an API command via HTTP to device
+var
+  HTTPClient: TIdHTTP;
+
+begin
+  try
+  if Command='' then
+    begin
+      Result:='';
+      exit;
+    end;
+
+  if LeftStr(LowerCase(Command),7)<>'http://' then
+    Command:='http://'+Command;
+
+  if LeftStr(LowerCase(Command),7)<>'http://' then
+    begin
+      {$IFDEF FSAPI_DEBUG}DebugPrint(STR_Error+'fsapi_HTTP -> not allowed command "'+Command+'"');{$ENDIF}
+      Result:='';
+      exit;
+    end;
+
+  HTTPClient:=TIdHTTP.Create(NIL);
+  {$IFDEF FSAPI_DEBUG}{$IFDEF LCL}DebugPrint(Trim(STR_Info+'fsapi_HTTP -> '+Command));{$ENDIF}{$ENDIF}
+  Result:=HTTPClient.Get(COMMAND);
+  except
+  on E:Exception do
+    begin
+      {$IFDEF FSAPI_DEBUG}E.Message:=STR_Error+'fsapi_HTTP -> '+E.Message; DebugPrint(E.Message);{$ENDIF}
+      if Pos('404',E.Message)>0 then
+        begin
+          {$IFDEF FSAPI_DEBUG}DebugPrint(STR_Error+'fsapi_HTTP -> error 404: clearing stored session ID');{$ENDIF}
+          fsapi_SessionID:='';
+        end;
+      Result:='';
+      if HTTPClient<>NIL then HTTPClient.Free;
+    end;
+  end;
+  if HTTPClient<>NIL then HTTPClient.Free;
+end;
+{$ELSE}
 function fsapi_HTTP(COMMAND: String): String;
 //Send an API command via HTTP to device
 var
@@ -329,24 +369,23 @@ var
 
 begin
   try
-  {$IFDEF LCL}
-  //try to prevent multiple HTTP instances if the API is used with threading
-  if fsapi_HTTP_active=true then
-    begin
-      Result:='';
-      exit;
-    end;
-  {$ENDIF}
-
   if Command='' then
     begin
       Result:='';
       exit;
     end;
-  {$IFDEF LCL}fsapi_HTTP_active:=true;{$ENDIF}
-  HTTPClient:=TFPCustomHTTPClient.Create(NIL);
+
   if LeftStr(LowerCase(Command),7)<>'http://' then
     Command:='http://'+Command;
+
+  if LeftStr(LowerCase(Command),7)<>'http://' then
+    begin
+      {$IFDEF FSAPI_DEBUG}DebugPrint(STR_Error+'fsapi_HTTP -> not allowed command "'+Command+'"');{$ENDIF}
+      Result:='';
+      exit;
+    end;
+
+  HTTPClient:=TFPCustomHTTPClient.Create(NIL);
   {$IFDEF FSAPI_DEBUG}{$IFDEF LCL}DebugPrint(Trim(STR_Info+'fsapi_HTTP -> '+Command));{$ENDIF}{$ENDIF}
   Result:=HTTPClient.SimpleGet(COMMAND);
   except
@@ -358,13 +397,13 @@ begin
           {$IFDEF FSAPI_DEBUG}DebugPrint(STR_Error+'fsapi_HTTP -> error 404: clearing stored session ID');{$ENDIF}
           fsapi_SessionID:='';
         end;
-      {$IFDEF LCL}fsapi_HTTP_active:=false;{$ENDIF}
       Result:='';
+      if HTTPClient<>NIL then HTTPClient.Free;
     end;
   end;
   if HTTPClient<>NIL then HTTPClient.Free;
-  {$IFDEF LCL}fsapi_HTTP_active:=false;{$ENDIF}
 end;
+{$ENDIF}
 //------------------------------------------------------------------------------
 
 
@@ -1402,7 +1441,11 @@ begin
                 begin
                   Location:=Trim(StringReplace(Buffer.Strings[index],'LOCATION:','',[rfReplaceAll,rfIgnoreCase]));
                   HTTPClient:=TFPCustomHTTPClient.Create(NIL);
+                  try
                   Description:=HTTPClient.SimpleGet(Location);
+                  except
+                  {$IFDEF FSAPI_DEBUG}DebugPrint(STR_ERROR+'fsapi_Info_DeviceList -> location error "'+Location+'"');{$ENDIF}
+                  end;
                   if HTTPClient<>NIL then HTTPClient.Free;
                   {$IFDEF LCL}Application.ProcessMessages;{$ENDIF}
                   if (Pos('FRONTIER-SILICON',UpperCase(Description))>0) or (Pos('UUID:3DCC7100',UpperCase(Description))>0) then
@@ -1462,7 +1505,7 @@ end;
 function fsapi_Info_DeviceList(TimeoutMS: Integer; const Icon_URL: Boolean = false): TStringList;
 //List device from network (dummy function without INDY10)
 begin
-  {$IFDEF FSAPI_DEBUG}E.Message:=STR_Error+'fsapi_Info_DeviceList -> INDY10 not enabled';{$ENDIF}
+  {$IFDEF FSAPI_DEBUG}DebugPrint(STR_Error+'fsapi_Info_DeviceList -> INDY10 not enabled');{$ENDIF}
   Result:=TStringList.Create;
 end;
 {$ENDIF}
